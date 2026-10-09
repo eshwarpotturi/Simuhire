@@ -157,7 +157,7 @@ flowchart TB
 
 `server.js` serves the Vite application in development and the production build in deployment. It also persists simulations, reports, and templates to `data.json`; defines JSON schemas for Claude’s structured outputs; and exposes routes for task generation/refinement, evaluation, chat, client calls, and support.
 
-When SMTP settings are configured, a `node-cron` job produces a report summary every ten minutes. The current recipient is hard-coded in `server.js`; this is appropriate only for demonstration and should be made recruiter-specific before deployment.
+When SMTP settings are configured, a `node-cron` job produces a report summary every ten minutes. The recipient is set with `REPORT_RECIPIENT` and the sender with `MAIL_FROM`; both should be made recruiter-specific before real deployment.
 
 ## API overview
 
@@ -198,10 +198,12 @@ Create `.env.local`:
 
 ```dotenv
 ANTHROPIC_API_KEY=your_claude_api_key
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_email_app_password
+SMTP_HOST=smtp.zoho.in
+SMTP_PORT=465
+SMTP_USER=eswar@simuhire.online
+SMTP_PASS=your_zoho_app_password
+MAIL_FROM=eswar@simuhire.online
+REPORT_RECIPIENT=eswar@simuhire.online
 ```
 
 > **Configuration note:** the server reads `process.env` but does not currently call `dotenv.config()`. Export variables before starting, or add dotenv loading to `server.js` as a follow-up improvement.

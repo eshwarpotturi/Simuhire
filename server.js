@@ -44,7 +44,7 @@ loadData();
 
 // --- Email Notification Logic ---
 async function sendDailyReport() {
-    const recipient = "kakumanu.ft262002@gmail.com";
+    const recipient = process.env.REPORT_RECIPIENT || "eswar@simuhire.online";
     const smtpHost = process.env.SMTP_HOST;
     const smtpPort = process.env.SMTP_PORT;
     const smtpUser = process.env.SMTP_USER;
@@ -123,7 +123,7 @@ async function sendDailyReport() {
 
     try {
         await transporter.sendMail({
-            from: `"SimuHire System" <${smtpUser}>`,
+            from: `"SimuHire" <${process.env.MAIL_FROM || smtpUser}>`,
             to: recipient,
             subject: `SimuHire Periodic Report - ${new Date().toLocaleString()}`,
             html: emailHtml,
