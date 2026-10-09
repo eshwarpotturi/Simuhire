@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { getClientCallResponse } from '../services/geminiService';
+import { getClientCallResponse } from '../services/aiService';
 import { PhoneIcon } from './Icons';
 import { LoggedEvent } from '../types';
 

@@ -2,24 +2,20 @@
 
 > Turn a job description into a realistic work simulation, measure how candidates respond to normal work and unexpected pressure, and receive an AI-assisted hiring report.
 
-## 🚀 Live Demo
-
-> **Try SimuHire in Google AI Studio:** [Open the live demo](https://ai.studio/apps/6c8c3d72-1938-4a2a-a177-b1eedc0d3aba)
-
-SimuHire is a full-stack recruiting prototype for assessing practical capability beyond a résumé or generic quiz. Recruiters create a role-specific, time-boxed simulation; candidates complete a randomly assigned subset of work; and Gemini evaluates submitted work, communication, pacing, and behaviour to create a structured performance report.
+SimuHire is a full-stack recruiting prototype for assessing practical capability beyond a résumé or generic quiz. Recruiters create a role-specific, time-boxed simulation; candidates complete a randomly assigned subset of work; and Claude evaluates submitted work, communication, pacing, and behaviour to create a structured performance report.
 
 ## Signature capability: the unexpected client call
 
 **SimuHire’s differentiator is an AI-powered client call that interrupts a candidate while they are working.** It recreates a realistic moment from professional life: an urgent stakeholder request appearing mid-task, with ambiguity, time pressure, and the need to communicate clearly.
 
-The recruiter can enable the scenario and define a valid trigger window. SimuHire randomly selects a moment within that window, displays an incoming call, and lets the candidate answer or decline. When answered, Gemini plays the client, dynamically responding to what the candidate says. The conversation transcript and call events become part of the final assessment.
+The recruiter can enable the scenario and define a valid trigger window. SimuHire randomly selects a moment within that window, displays an incoming call, and lets the candidate answer or decline. When answered, Claude plays the client, dynamically responding to what the candidate says. The conversation transcript and call events become part of the final assessment.
 
 ```mermaid
 sequenceDiagram
     participant R as Recruiter
     participant W as Candidate workspace
     participant C as Candidate
-    participant G as Gemini client
+    participant G as Claude client
     participant E as AI evaluation
 
     R->>W: Enable call and set earliest/latest trigger minute
@@ -55,7 +51,7 @@ sequenceDiagram
 flowchart LR
     R[Recruiter] -->|Role brief and settings| UI[React + TypeScript app]
     UI -->|Generate or reuse task pool| API[Express API]
-    API -->|Structured prompts| G[Google Gemini]
+    API -->|Structured prompts| G[Claude API]
     G -->|Tasks and criteria| API
     API --> D[(data.json)]
 
@@ -71,7 +67,7 @@ flowchart LR
 ### Recruiter flow
 
 1. Sign in as a recruiter and enter the job title, job description, duration, and client-call settings.
-2. Generate a **ten-task pool** with Gemini, or load a reusable template.
+2. Generate a **ten-task pool** with Claude, or load a reusable template.
 3. Review, refine, group, regenerate, add, or remove tasks; obtain AI-suggested evaluation criteria where needed.
 4. Save the simulation and share the generated `?simId=...` link with candidates.
 5. Review candidate performance reports and portfolio-level analytics.
@@ -114,7 +110,7 @@ The performance analysis does not evaluate an answer in isolation. It receives:
 
 It returns a report containing an overall summary, strengths, areas for improvement, 1–10 scores for problem solving, communication, and stress management, a suitability score, and a hiring recommendation with reasoning.
 
-> **Current implementation detail:** text submissions are sent to the evaluator. Image, audio, and video submissions are evaluated by file name/type and task-fit assumptions—the server does not inspect media contents.
+> **Current implementation detail:** text submissions and image submissions (JPEG, PNG, GIF, WebP up to 5 MB) are sent to Claude, which evaluates their actual content. Audio and video submissions, and larger images, are not inspected: the evaluator only sees the file name and type and says so in the report.
 
 ## Architecture
 
@@ -137,7 +133,7 @@ flowchart TB
     end
 
     subgraph External
-        G[Google Gemini]
+        G[Claude API]
         SMTP[SMTP provider]
     end
 
@@ -155,13 +151,13 @@ flowchart TB
 | `components/CandidateWorkspace.tsx` | Timer, autosave, task submission, upload checks, event logging, and client-call scheduling. |
 | `components/ClientCallModal.tsx` | The conversational, pressure-scenario interruption. |
 | `components/PerformanceReport.tsx` | Recruiter-facing scorecard and recommendation report. |
-| `services/geminiService.ts` | Typed client wrapper for Express AI endpoints. |
+| `services/aiService.ts` | Typed client wrapper for Express AI endpoints. |
 
 ### Backend responsibilities
 
-`server.js` serves the Vite application in development and the production build in deployment. It also persists simulations, reports, and templates to `data.json`; defines JSON schemas for Gemini’s structured outputs; and exposes routes for task generation/refinement, evaluation, chat, client calls, and support.
+`server.js` serves the Vite application in development and the production build in deployment. It also persists simulations, reports, and templates to `data.json`; defines JSON schemas for Claude’s structured outputs; and exposes routes for task generation/refinement, evaluation, chat, client calls, and support.
 
-When SMTP settings are configured, a `node-cron` job produces a report summary every ten minutes. The current recipient is hard-coded in `server.js`; this is appropriate only for demonstration and should be made recruiter-specific before deployment.
+When SMTP settings are configured, a `node-cron` job produces a report summary every ten minutes. The recipient is set with `REPORT_RECIPIENT` and the sender with `MAIL_FROM`; both should be made recruiter-specific before real deployment.
 
 ## API overview
 
@@ -179,7 +175,7 @@ When SMTP settings are configured, a `node-cron` job produces a report summary e
 
 - **Frontend:** React 19, TypeScript, Vite, Tailwind CSS
 - **Backend:** Node.js, Express
-- **AI:** Google Gen AI SDK (`@google/genai`)
+- **AI:** Claude via the Anthropic SDK (`@anthropic-ai/sdk`): Claude Haiku for task design and live conversations, Claude Sonnet for the final evaluation
 - **Persistence:** JSON file with browser-storage fallback
 - **Automation:** Nodemailer and node-cron
 - **Validation/testing:** JSON response schemas, TypeScript checks, Jest
@@ -189,7 +185,7 @@ When SMTP settings are configured, a `node-cron` job produces a report summary e
 ### Prerequisites
 
 - Node.js 18 or newer
-- A Google Gemini API key
+- A Claude API key from the [Claude Console](https://platform.claude.com)
 - SMTP credentials only for scheduled email summaries
 
 ```bash
@@ -201,11 +197,13 @@ npm install
 Create `.env.local`:
 
 ```dotenv
-GEMINI_API_KEY=your_gemini_api_key
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_email_app_password
+ANTHROPIC_API_KEY=your_claude_api_key
+SMTP_HOST=smtp.zoho.in
+SMTP_PORT=465
+SMTP_USER=eswar@simuhire.online
+SMTP_PASS=your_zoho_app_password
+MAIL_FROM=eswar@simuhire.online
+REPORT_RECIPIENT=eswar@simuhire.online
 ```
 
 > **Configuration note:** the server reads `process.env` but does not currently call `dotenv.config()`. Export variables before starting, or add dotenv loading to `server.js` as a follow-up improvement.
@@ -216,6 +214,8 @@ npm run dev
 ```
 
 Open [http://localhost:8080](http://localhost:8080). The port can be changed with `PORT`.
+
+The Claude models can be overridden with `CLAUDE_FAST_MODEL` (default `claude-haiku-5-5`) and `CLAUDE_ANALYSIS_MODEL` (default `claude-sonnet-5-5`).
 
 ```bash
 npm run lint     # Type-check
@@ -234,10 +234,6 @@ SimuHire is an impressive workflow prototype, but real hiring use requires stron
 4. Store uploads securely, scan them, and be transparent about any automated media assessment.
 5. Move email recipient selection and all operational configuration out of source code.
 6. Add human review, calibration, auditing, privacy safeguards, and fairness testing before AI recommendations influence hiring decisions.
-
-## Portfolio highlights
-
-SimuHire demonstrates full-stack TypeScript development, structured generative-AI workflows, two-sided product design, event-aware assessment UX, reusable template systems, and responsible documentation of the gap between a compelling prototype and a deployable hiring product.
 
 ## License
 

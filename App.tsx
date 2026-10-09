@@ -631,7 +631,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => (
             <p className="font-bold text-xl text-slate-300 mb-4">SimuHire</p>
             <p className="mb-4">For inquiries, partnerships, or support, please reach out.</p>
             <div className="flex flex-col sm:flex-row justify-center items-center gap-x-6 gap-y-2 mb-6">
-                <a href="mailto:pothuri.ft262009@greatlakes.edu.in" className="hover:text-blue-400 transition-colors">pothuri.ft262009@greatlakes.edu.in</a>
+                <a href="mailto:contact@simuhire.online" className="hover:text-blue-400 transition-colors">contact@simuhire.online</a>
                 <a href="tel:+918919199428" className="hover:text-blue-400 transition-colors">+91 8919199428</a>
             </div>
             <p className="text-sm">&copy; {new Date().getFullYear()} SimuHire. All Rights Reserved. Built with passion and AI.</p>

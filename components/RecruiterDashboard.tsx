@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { generateSimulationTasks, modifySimulationTasks, regenerateOrModifySingleTask, generateSingleTask, groupTasks, suggestEvaluationCriteria } from '../services/geminiService';
+import { generateSimulationTasks, modifySimulationTasks, regenerateOrModifySingleTask, generateSingleTask, groupTasks, suggestEvaluationCriteria } from '../services/aiService';
 import { Simulation, Tool, Task, PerformanceReport, TaskGroup, SimulationTemplate, TaskType } from '../types';
 import { PencilIcon, RefreshIcon, TrashIcon, PlusIcon, SpinnerIcon, ClipboardIcon, CalendarIcon, ClockIcon, CheckCircleIcon, ChartBarIcon, CollectionIcon, CheckBadgeIcon, AcademicCapIcon, DragHandleIcon, BookmarkIcon, SparklesIcon, ChevronUpIcon, ChevronDownIcon, DocumentTextIcon, PhotographIcon, VolumeUpIcon, VideoCameraIcon } from './Icons';
 import SimulationPreviewModal from './SimulationPreviewModal';

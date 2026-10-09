@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, Type } from '@google/genai';
+import Anthropic from '@anthropic-ai/sdk';
 import cron from 'node-cron';
 import nodemailer from 'nodemailer';
 
@@ -44,7 +44,7 @@ loadData();
 
 // --- Email Notification Logic ---
 async function sendDailyReport() {
-    const recipient = "kakumanu.ft262002@gmail.com";
+    const recipient = process.env.REPORT_RECIPIENT || "eswar@simuhire.online";
     const smtpHost = process.env.SMTP_HOST;
     const smtpPort = process.env.SMTP_PORT;
     const smtpUser = process.env.SMTP_USER;
@@ -123,7 +123,7 @@ async function sendDailyReport() {
 
     try {
         await transporter.sendMail({
-            from: `"SimuHire System" <${smtpUser}>`,
+            from: `"SimuHire" <${process.env.MAIL_FROM || smtpUser}>`,
             to: recipient,
             subject: `SimuHire Periodic Report - ${new Date().toLocaleString()}`,
             html: emailHtml,
@@ -156,81 +156,84 @@ if (process.env.NODE_ENV !== 'production') {
     app.use(express.static(path.join(__dirname, 'dist')));
 }
 
-// --- Schemas for JSON responses ---
+// --- Claude configuration ---
+// Fast model for task design and live conversations; stronger model for the final evaluation.
+// Both can be overridden with environment variables.
+const FAST_MODEL = process.env.CLAUDE_FAST_MODEL || 'claude-haiku-5-5';
+const ANALYSIS_MODEL = process.env.CLAUDE_ANALYSIS_MODEL || 'claude-sonnet-5-5';
+
+// Image formats Claude can read directly, and the per-image size limit we enforce before sending.
+const CLAUDE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+// --- JSON Schemas for structured responses ---
+const TASK_TYPES = ['TEXT', 'IMAGE', 'AUDIO', 'VIDEO'];
+
 const assetSchema = {
-  type: Type.OBJECT,
+  type: 'object',
   properties: {
-    type: { type: Type.STRING, enum: ['infographic', 'email_thread', 'spreadsheet_data', 'document'] },
-    title: { type: Type.STRING },
-    content: { type: Type.STRING },
+    type: { type: 'string', enum: ['infographic', 'email_thread', 'spreadsheet_data', 'document'] },
+    title: { type: 'string' },
+    content: { type: 'string' },
   },
   required: ['type', 'content'],
 };
 
-const taskSchema = {
-  type: Type.OBJECT,
+const singleTaskSchema = {
+  type: 'object',
   properties: {
-      id: { type: Type.STRING },
-      title: { type: Type.STRING },
-      description: { type: Type.STRING },
-      asset: assetSchema,
-      type: { type: Type.STRING, enum: ['TEXT', 'IMAGE', 'AUDIO', 'VIDEO'] },
+    title: { type: 'string' },
+    description: { type: 'string' },
+    asset: assetSchema,
+    type: { type: 'string', enum: TASK_TYPES },
   },
-  required: ["id", "title", "description", "type"],
+  required: ['title', 'description', 'type'],
+};
+
+// Claude returns structured data as a tool input, which must be an object, so lists are wrapped.
+const taskListSchema = {
+  type: 'object',
+  properties: {
+    tasks: { type: 'array', items: singleTaskSchema },
+  },
+  required: ['tasks'],
 };
 
 const groupsSchema = {
-    type: Type.ARRAY,
-    items: {
-        type: Type.OBJECT,
+  type: 'object',
+  properties: {
+    groups: {
+      type: 'array',
+      items: {
+        type: 'object',
         properties: {
-            title: { type: Type.STRING },
-            tasks: { type: Type.ARRAY, items: taskSchema },
+          title: { type: 'string' },
+          taskIds: { type: 'array', items: { type: 'string' } },
         },
-        required: ["title", "tasks"],
+        required: ['title', 'taskIds'],
+      },
     },
+  },
+  required: ['groups'],
 };
 
-const tasksSchemaWithoutId = {
-  type: Type.ARRAY,
-  items: {
-    type: Type.OBJECT,
-    properties: {
-        title: { type: Type.STRING },
-        description: { type: Type.STRING },
-        asset: assetSchema,
-        type: { type: Type.STRING, enum: ['TEXT', 'IMAGE', 'AUDIO', 'VIDEO'] },
-    },
-    required: ["title", "description", "type"],
-  },
-};
-const singleTaskSchema = {
-  type: Type.OBJECT,
-  properties: {
-    title: { type: Type.STRING },
-    description: { type: Type.STRING },
-    asset: assetSchema,
-    type: { type: Type.STRING, enum: ['TEXT', 'IMAGE', 'AUDIO', 'VIDEO'] },
-   },
-  required: ["title", "description", "type"],
-};
 const analysisSchema = {
-  type: Type.OBJECT,
+  type: 'object',
   properties: {
-    summary: { type: Type.STRING },
-    strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
-    areasForImprovement: { type: Type.ARRAY, items: { type: Type.STRING } },
-    stressManagementScore: { type: Type.NUMBER },
-    communicationScore: { type: Type.NUMBER },
-    problemSolvingScore: { type: Type.NUMBER },
-    recommendation: { type: Type.STRING, enum: ['HIRE', 'CONSIDER', 'NO_HIRE'] },
-    suitabilityScore: { type: Type.NUMBER },
-    recommendationReasoning: { type: Type.STRING },
+    summary: { type: 'string' },
+    strengths: { type: 'array', items: { type: 'string' } },
+    areasForImprovement: { type: 'array', items: { type: 'string' } },
+    stressManagementScore: { type: 'integer', minimum: 1, maximum: 10 },
+    communicationScore: { type: 'integer', minimum: 1, maximum: 10 },
+    problemSolvingScore: { type: 'integer', minimum: 1, maximum: 10 },
+    recommendation: { type: 'string', enum: ['HIRE', 'CONSIDER', 'NO_HIRE'] },
+    suitabilityScore: { type: 'integer', minimum: 1, maximum: 10 },
+    recommendationReasoning: { type: 'string' },
   },
   required: [
-    "summary", "strengths", "areasForImprovement", "stressManagementScore", "communicationScore", "problemSolvingScore",
-    "recommendation", "suitabilityScore", "recommendationReasoning"
-  ]
+    'summary', 'strengths', 'areasForImprovement', 'stressManagementScore', 'communicationScore', 'problemSolvingScore',
+    'recommendation', 'suitabilityScore', 'recommendationReasoning',
+  ],
 };
 
 // --- API Endpoints ---
@@ -280,56 +283,107 @@ app.delete('/api/templates/:id', (req, res) => {
     }
 });
 
-const getConfigError = () => ({
-    error: "Configuration Error: The 'API_KEY' environment variable is missing on the server. Please check your hosting environment settings and ensure a variable named 'API_KEY' is set with your valid Gemini API key."
-});
+// --- Claude helpers ---
 
-// Generic handler to wrap Gemini calls that expect a JSON response
-async function handleApiCall(res, modelCall) {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-        return res.status(500).json(getConfigError());
-    }
-    const ai = new GoogleGenAI({ apiKey });
+const CONFIG_ERROR = {
+    error: "Configuration Error: The 'ANTHROPIC_API_KEY' environment variable is missing on the server. Please check your hosting environment settings and ensure a variable named 'ANTHROPIC_API_KEY' is set with a valid Claude API key."
+};
 
-    try {
-        const response = await modelCall(ai);
-        let text = response.text.trim();
-        
-        // Handle cases where the model wraps the JSON in ```json ... ```
-        if (text.startsWith("```json")) {
-            text = text.substring(7, text.length - 3).trim();
-        } else if (text.startsWith("```")) {
-            text = text.substring(3, text.length - 3).trim();
-        }
-        
-        if (!text) {
-             throw new Error("AI service returned an empty response.");
-        }
-        
-        res.json(JSON.parse(text));
-    } catch (error) {
-        console.error("Gemini API call failed or response parsing failed:", error);
-        res.status(500).json({ error: "An error occurred while communicating with the AI service. The response may not have been valid JSON." });
+let anthropicClient = null;
+function getClaude() {
+    if (!process.env.ANTHROPIC_API_KEY) return null;
+    if (!anthropicClient) {
+        anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     }
+    return anthropicClient;
 }
 
-// Generic handler for Gemini calls that expect a plain text response
-async function handleTextApiCall(res, modelCall) {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-        return res.status(500).json(getConfigError());
-    }
-    const ai = new GoogleGenAI({ apiKey });
+// Ask Claude for a response that matches a JSON Schema. The schema is supplied as the input
+// schema of a single tool that Claude is required to call, so the result is always structured.
+async function claudeJson(claude, { model, content, schema, toolName, toolDescription, maxTokens = 4096 }) {
+    const response = await claude.messages.create({
+        model,
+        max_tokens: maxTokens,
+        tools: [{ name: toolName, description: toolDescription, input_schema: schema }],
+        tool_choice: { type: 'tool', name: toolName },
+        messages: [{ role: 'user', content }],
+    });
 
+    if (response.stop_reason === 'max_tokens') {
+        throw new Error("The AI response was cut off before it was complete.");
+    }
+    const toolUse = response.content.find(block => block.type === 'tool_use');
+    if (!toolUse) {
+        throw new Error("AI service returned no structured response.");
+    }
+    return toolUse.input;
+}
+
+// Ask Claude for a plain text reply.
+async function claudeText(claude, { model, system, messages, maxTokens = 1024 }) {
+    const response = await claude.messages.create({
+        model,
+        max_tokens: maxTokens,
+        ...(system ? { system } : {}),
+        messages,
+    });
+    const text = response.content
+        .filter(block => block.type === 'text')
+        .map(block => block.text)
+        .join('')
+        .trim();
+    if (!text) {
+        throw new Error("AI service returned an empty response.");
+    }
+    return text;
+}
+
+// Convert a UI chat history into Claude's alternating message format. Claude conversations must
+// open with a user turn, so if the history opens with the AI, `openingUserTurn` is placed first.
+function toClaudeMessages(entries, openingUserTurn) {
+    const messages = [];
+    for (const { role, text } of entries) {
+        if (!text || !text.trim()) continue;
+        const last = messages[messages.length - 1];
+        if (last && last.role === role) {
+            last.content += `\n\n${text}`;
+        } else {
+            messages.push({ role, content: text });
+        }
+    }
+    if (messages.length === 0 || messages[0].role !== 'user') {
+        messages.unshift({ role: 'user', content: openingUserTurn });
+    }
+    // Claude replies to the latest user turn, so the history must not end on the AI's own message.
+    if (messages[messages.length - 1].role !== 'user') {
+        messages.push({ role: 'user', content: '(No reply yet.)' });
+    }
+    return messages;
+}
+
+// Wraps an endpoint that returns structured JSON.
+async function handleJsonCall(res, label, run) {
+    const claude = getClaude();
+    if (!claude) {
+        return res.status(500).json(CONFIG_ERROR);
+    }
     try {
-        const response = await modelCall(ai);
-        res.json({ text: response.text.trim() });
+        res.json(await run(claude));
     } catch (error) {
-        console.error("Gemini API call failed:", error);
+        console.error(`Claude API call failed in ${label}:`, error);
         res.status(500).json({ error: "An error occurred while communicating with the AI service." });
     }
 }
+
+// Wraps an endpoint that returns plain text as { text }.
+async function handleTextCall(res, label, run) {
+    await handleJsonCall(res, label, async (claude) => ({ text: await run(claude) }));
+}
+
+const withIds = (tasks) => tasks.map((task, index) => ({
+    ...task,
+    id: `task-${Date.now()}-${index}`,
+}));
 
 
 app.post('/api/generate-tasks', async (req, res) => {
@@ -341,7 +395,7 @@ app.post('/api/generate-tasks', async (req, res) => {
 - A 'VIDEO' task requires a video file upload (e.g., a short screen recording or presentation).
 Make the task descriptions clearly state what kind of submission is expected.
 
-Return the tasks as a JSON array of objects. Each object must have a "title", a "description", and a "type" ('TEXT', 'IMAGE', 'AUDIO', or 'VIDEO').
+Each task must have a "title", a "description", and a "type" ('TEXT', 'IMAGE', 'AUDIO', or 'VIDEO').
 
 **CRITICAL REQUIREMENT:** If a task requires the candidate to analyze an external document (like an infographic, email, dataset, or memo), you **MUST** create and embed that document's content directly within the task object under an \`asset\` field. The \`asset\` object must have:
 1. \`type\`: one of 'infographic', 'email_thread', 'spreadsheet_data', 'document'.
@@ -350,153 +404,125 @@ Return the tasks as a JSON array of objects. Each object must have a "title", a 
 
 Job Title: ${jobTitle}
 Job Description: ${jobDescription}`;
-    
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-        return res.status(500).json(getConfigError());
-    }
-    const ai = new GoogleGenAI({ apiKey });
 
-    try {
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: { 
-                responseMimeType: "application/json", 
-                responseSchema: tasksSchemaWithoutId,
-                thinkingConfig: { thinkingBudget: 0 },
-            },
+    await handleJsonCall(res, '/api/generate-tasks', async (claude) => {
+        const { tasks } = await claudeJson(claude, {
+            model: FAST_MODEL,
+            content: prompt,
+            schema: taskListSchema,
+            toolName: 'save_simulation_tasks',
+            toolDescription: 'Save the generated list of work-simulation tasks.',
+            maxTokens: 8192,
         });
-        
-        let text = response.text.trim();
-        if (text.startsWith("```json")) {
-            text = text.substring(7, text.length - 3).trim();
-        } else if (text.startsWith("```")) {
-            text = text.substring(3, text.length - 3).trim();
-        }
-
-        if (!text) {
-             throw new Error("AI service returned an empty response.");
-        }
-
-        const tasks = JSON.parse(text);
-        const tasksWithIds = tasks.map((task, index) => ({
-            ...task,
-            id: `task-${Date.now()}-${index}`
-        }));
-        res.json(tasksWithIds);
-    } catch (error) {
-        console.error("Gemini API call failed in /api/generate-tasks:", error);
-        res.status(500).json({ error: "An error occurred while communicating with the AI service." });
-    }
+        return withIds(tasks);
+    });
 });
 
 app.post('/api/modify-tasks', async (req, res) => {
     const { jobTitle, jobDescription, currentTasks, modification } = req.body;
-    const prompt = `You are an assistant helping a recruiter refine a work simulation.\n\nJob Title: ${jobTitle}\nJob Description: ${jobDescription}\n\nHere is the current list of tasks for the simulation:\n${JSON.stringify(currentTasks, null, 2)}\n\nThe recruiter has requested the following modification: "${modification}"\n\nPlease generate and return a new, complete list of tasks that incorporates this change. Maintain the JSON array format, where each task object has a "title", "description", and a "type" ('TEXT', 'IMAGE', 'AUDIO', or 'VIDEO'). Make the description clearly state the expected submission type. If a task requires an asset (like an email or document), you MUST include it in an 'asset' object as per the schema.`;
+    const prompt = `You are an assistant helping a recruiter refine a work simulation.\n\nJob Title: ${jobTitle}\nJob Description: ${jobDescription}\n\nHere is the current list of tasks for the simulation:\n${JSON.stringify(currentTasks, null, 2)}\n\nThe recruiter has requested the following modification: "${modification}"\n\nPlease generate and return a new, complete list of tasks that incorporates this change. Each task has a "title", "description", and a "type" ('TEXT', 'IMAGE', 'AUDIO', or 'VIDEO'). Make the description clearly state the expected submission type. If a task requires an asset (like an email or document), you MUST include it in an 'asset' object as per the schema.`;
 
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-        return res.status(500).json(getConfigError());
-    }
-    const ai = new GoogleGenAI({ apiKey });
-
-    try {
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: { 
-                responseMimeType: "application/json", 
-                responseSchema: tasksSchemaWithoutId,
-                thinkingConfig: { thinkingBudget: 0 },
-            },
+    await handleJsonCall(res, '/api/modify-tasks', async (claude) => {
+        const { tasks } = await claudeJson(claude, {
+            model: FAST_MODEL,
+            content: prompt,
+            schema: taskListSchema,
+            toolName: 'save_simulation_tasks',
+            toolDescription: 'Save the complete, updated list of work-simulation tasks.',
+            maxTokens: 8192,
         });
-        
-        let text = response.text.trim();
-        if (text.startsWith("```json")) {
-            text = text.substring(7, text.length - 3).trim();
-        } else if (text.startsWith("```")) {
-            text = text.substring(3, text.length - 3).trim();
-        }
-
-        if (!text) {
-             throw new Error("AI service returned an empty response.");
-        }
-
-        const tasks = JSON.parse(text);
-        const tasksWithIds = tasks.map((task, index) => ({
-            ...task,
-            id: `task-${Date.now()}-${index}`
-        }));
-        res.json(tasksWithIds);
-    } catch (error) {
-        console.error("Gemini API call failed in /api/modify-tasks:", error);
-        res.status(500).json({ error: "An error occurred while communicating with the AI service." });
-    }
+        return withIds(tasks);
+    });
 });
 
 app.post('/api/regenerate-single-task', async (req, res) => {
     const { jobTitle, jobDescription, allTasks, taskToChange, instruction } = req.body;
     const otherTasks = allTasks.filter(t => t.id !== taskToChange.id);
-    const prompt = `You are an assistant helping a recruiter refine a single task within a work simulation.\n\nJob Title: ${jobTitle}\nJob Description: ${jobDescription}\n\nHere is the full list of existing tasks, for context, to avoid creating a duplicate:\n${JSON.stringify(otherTasks, null, 2)}\n\nHere is the specific task to be changed:\n${JSON.stringify(taskToChange, null, 2)}\n\nThe recruiter's instruction for this task is: "${instruction}"\n\nPlease generate ONLY the single, updated task based on this instruction. If the updated task requires an asset (like an email or document), include it in an 'asset' object. Return a single JSON object with "title", "description", and "type" ('TEXT', 'IMAGE', 'AUDIO', or 'VIDEO'). Make the description clear about what to submit.`;
+    const prompt = `You are an assistant helping a recruiter refine a single task within a work simulation.\n\nJob Title: ${jobTitle}\nJob Description: ${jobDescription}\n\nHere is the full list of existing tasks, for context, to avoid creating a duplicate:\n${JSON.stringify(otherTasks, null, 2)}\n\nHere is the specific task to be changed:\n${JSON.stringify(taskToChange, null, 2)}\n\nThe recruiter's instruction for this task is: "${instruction}"\n\nPlease generate ONLY the single, updated task based on this instruction. If the updated task requires an asset (like an email or document), include it in an 'asset' object. The task has a "title", "description", and "type" ('TEXT', 'IMAGE', 'AUDIO', or 'VIDEO'). Make the description clear about what to submit.`;
 
-    await handleApiCall(res, (genAI) => genAI.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: { 
-            responseMimeType: "application/json", 
-            responseSchema: singleTaskSchema,
-            thinkingConfig: { thinkingBudget: 0 },
-        },
+    await handleJsonCall(res, '/api/regenerate-single-task', (claude) => claudeJson(claude, {
+        model: FAST_MODEL,
+        content: prompt,
+        schema: singleTaskSchema,
+        toolName: 'save_task',
+        toolDescription: 'Save the single updated work-simulation task.',
     }));
 });
 
 app.post('/api/generate-single-task', async (req, res) => {
     const { jobTitle, jobDescription, existingTasks } = req.body;
-    const prompt = `You are an assistant helping a recruiter create a work simulation.\n\nJob Title: ${jobTitle}\nJob Description: ${jobDescription}\n\nHere is the list of existing tasks. Please generate ONE new, distinct task that is not a repeat of the ones below:\n${JSON.stringify(existingTasks, null, 2)}\n\nReturn a single JSON object for the new task with "title", "description", and a "type" ('TEXT', 'IMAGE', 'AUDIO', or 'VIDEO'). The description must clearly explain the expected submission type. If the new task requires an asset (like an email or document), you MUST include it in an 'asset' object.`;
+    const prompt = `You are an assistant helping a recruiter create a work simulation.\n\nJob Title: ${jobTitle}\nJob Description: ${jobDescription}\n\nHere is the list of existing tasks. Please generate ONE new, distinct task that is not a repeat of the ones below:\n${JSON.stringify(existingTasks, null, 2)}\n\nThe new task has a "title", "description", and a "type" ('TEXT', 'IMAGE', 'AUDIO', or 'VIDEO'). The description must clearly explain the expected submission type. If the new task requires an asset (like an email or document), you MUST include it in an 'asset' object.`;
 
-    await handleApiCall(res, (genAI) => genAI.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: { 
-            responseMimeType: "application/json", 
-            responseSchema: singleTaskSchema,
-            thinkingConfig: { thinkingBudget: 0 },
-        },
+    await handleJsonCall(res, '/api/generate-single-task', (claude) => claudeJson(claude, {
+        model: FAST_MODEL,
+        content: prompt,
+        schema: singleTaskSchema,
+        toolName: 'save_task',
+        toolDescription: 'Save the single new work-simulation task.',
     }));
 });
 
 app.post('/api/group-tasks', async (req, res) => {
-    const { tasks } = req.body;
+    const tasks = req.body.tasks || [];
+    // Claude only decides which task goes in which group. The full task objects are re-attached
+    // here, so nothing a recruiter wrote (such as evaluation criteria) can be altered or dropped.
+    const taskSummaries = tasks.map(({ id, title, description, type }) => ({ id, title, description, type }));
     const prompt = `You are an expert hiring manager tasked with organizing a job simulation. Analyze the following list of tasks. Group them into logical categories based on the primary skill each task evaluates (e.g., "Client Communication & Follow-up", "Data Analysis & Reporting", "Strategic Planning").
 
-For each group, provide a concise, descriptive title. Every task from the input list must be placed into exactly one group.
-
-Return the result as a JSON array of group objects. Each object must have:
-1. A "title" property (string) for the group name.
-2. A "tasks" property (array) containing the full original task objects that belong to that group.
+For each group, provide a concise, descriptive title and the list of task ids that belong to it. Every task from the input list must be placed into exactly one group.
 
 Existing Tasks:
-${JSON.stringify(tasks, null, 2)}`;
+${JSON.stringify(taskSummaries, null, 2)}`;
 
-    await handleApiCall(res, (genAI) => genAI.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: { responseMimeType: "application/json", responseSchema: groupsSchema },
-    }));
+    await handleJsonCall(res, '/api/group-tasks', async (claude) => {
+        const { groups } = await claudeJson(claude, {
+            model: FAST_MODEL,
+            content: prompt,
+            schema: groupsSchema,
+            toolName: 'save_task_groups',
+            toolDescription: 'Save the task groups, each with a title and the ids of its tasks.',
+        });
+
+        const tasksById = new Map(tasks.map(task => [task.id, task]));
+        const result = [];
+        for (const group of groups) {
+            const groupTasks = [];
+            for (const id of group.taskIds) {
+                // Each task is used once, even if the model listed it in two groups.
+                if (tasksById.has(id)) {
+                    groupTasks.push(tasksById.get(id));
+                    tasksById.delete(id);
+                }
+            }
+            if (groupTasks.length > 0) {
+                result.push({ title: group.title, tasks: groupTasks });
+            }
+        }
+        // Any task the model left out still has to appear somewhere.
+        if (tasksById.size > 0) {
+            result.push({ title: 'Other', tasks: [...tasksById.values()] });
+        }
+        return result;
+    });
 });
 
 app.post('/api/suggest-criteria', async (req, res) => {
     const { taskTitle, taskDescription } = req.body;
-    const prompt = `You are an expert hiring manager. For a simulation task titled "${taskTitle}" with the description "${taskDescription}", suggest a concise, bullet-pointed list of evaluation criteria. This criteria will be used by an AI to score a candidate's response. Focus on 2-4 measurable outcomes. Start each point with a hyphen.`;
+    const prompt = `You are an expert hiring manager. For a simulation task titled "${taskTitle}" with the description "${taskDescription}", suggest a concise, bullet-pointed list of evaluation criteria. This criteria will be used by an AI to score a candidate's response. Focus on 2-4 measurable outcomes. Start each point with a hyphen. Return only the bullet points, with no introduction.`;
 
-    await handleTextApiCall(res, (genAI) => genAI.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt }));
+    await handleTextCall(res, '/api/suggest-criteria', (claude) => claudeText(claude, {
+        model: FAST_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+    }));
 });
 
 
 app.post('/api/analyze-performance', async (req, res) => {
     const { simulation, work, behavioralData } = req.body;
     const allTasks = simulation.tasks || [];
+
+    // Image submissions that Claude can inspect directly are attached after the written brief.
+    const imageBlocks = [];
 
     const submittedTasksContent = allTasks
         .filter(task => work.taskAnswers && work.taskAnswers[task.id] !== undefined)
@@ -507,10 +533,22 @@ app.post('/api/analyze-performance', async (req, res) => {
                 case 'TEXT':
                     answerContent = `CANDIDATE'S SUBMITTED ANSWER (Text):\n"""\n${answer.content}\n"""`;
                     break;
-                case 'IMAGE':
+                case 'IMAGE': {
+                    const imageBytes = Math.floor(((answer.content || '').length * 3) / 4);
+                    if (answer.content && CLAUDE_IMAGE_TYPES.has(answer.fileType) && imageBytes <= MAX_IMAGE_BYTES) {
+                        imageBlocks.push(
+                            { type: 'text', text: `Attached image submitted for the task "${task.title}" (file name: ${answer.fileName}):` },
+                            { type: 'image', source: { type: 'base64', media_type: answer.fileType, data: answer.content } },
+                        );
+                        answerContent = `CANDIDATE'S SUBMISSION (IMAGE):\nFile Name: ${answer.fileName}\nFile Type: ${answer.fileType}\n(The image itself is attached at the end of this message. Inspect it and evaluate its actual content against the task.)`;
+                        break;
+                    }
+                    answerContent = `CANDIDATE'S SUBMISSION (IMAGE):\nFile Name: ${answer.fileName}\nFile Type: ${answer.fileType}\n(NOTE: This image could not be attached, so you cannot see its contents. State this limitation and do not score its content.)`;
+                    break;
+                }
                 case 'AUDIO':
                 case 'VIDEO':
-                    answerContent = `CANDIDATE'S SUBMISSION (${answer.type}):\nFile Name: ${answer.fileName}\nFile Type: ${answer.fileType}\n(NOTE: You cannot see the file contents. Evaluate based on the assumption that an appropriate file was uploaded as requested.)`;
+                    answerContent = `CANDIDATE'S SUBMISSION (${answer.type}):\nFile Name: ${answer.fileName}\nFile Type: ${answer.fileType}\n(NOTE: You cannot see or hear this file. You only know that a file of this type was uploaded.)`;
                     break;
                 default:
                     answerContent = 'Unknown submission type.';
@@ -526,10 +564,10 @@ ${answerContent}
 ---
 `}).join('\n');
 
-    const prompt = `You are an expert hiring manager analyzing a candidate's performance in a work simulation for the role of "${simulation.jobTitle}".
+    const prompt = `You are an expert hiring manager analyzing a candidate's performance in a work simulation for the role of "${simulation.jobTitle}". Your report supports a human recruiter, who makes the final hiring decision.
 
 **CANDIDATE'S SUBMITTED WORK**
-The candidate has provided the following submissions for their assigned tasks. Submissions can be text or file uploads (image, audio, video). For file uploads, you will only see the file name and type. You must assume the candidate uploaded a file relevant to the task and evaluate their performance based on the task description and the act of submission itself.
+The candidate has provided the following submissions for their assigned tasks. Submissions can be text or file uploads (image, audio, video). Image submissions are attached to this message where possible, so you can inspect them. Audio and video files are not attached: for those you will only see the file name and type.
 
 ${submittedTasksContent.length > 0 ? submittedTasksContent : "The candidate did not submit answers for any tasks."}
 
@@ -548,82 +586,84 @@ The following data should be used to evaluate broader skills like communication 
 **EVALUATION INSTRUCTIONS**
 1.  **Task-Specific Analysis:** For each submitted task, evaluate the candidate's work.
     - For 'TEXT' submissions, use the provided 'EVALUATION CRITERIA' to score the written answer.
-    - For 'IMAGE', 'AUDIO', or 'VIDEO' submissions, acknowledge that a file was submitted. Evaluate based on whether this action fulfills the task requirements described in the 'DESCRIPTION'. Assume the file content is appropriate unless there's a clear mismatch in file type. The core of this analysis is whether they followed the instructions to provide the correct *type* of deliverable.
+    - For 'IMAGE' submissions that are attached, evaluate what the image actually shows against the task description and the 'EVALUATION CRITERIA'. If the image does not match the task, say so.
+    - For 'AUDIO' or 'VIDEO' submissions, and any image that could not be attached, acknowledge that a file was submitted and check only whether the correct *type* of deliverable was provided. Do not guess at or praise content you cannot inspect, and note in the report that it was not reviewed.
 2.  **Behavioral Analysis from Event Log**:
     - Analyze the timestamps to understand the candidate's pacing, time management, and how long they spent on each task (time between 'TASK_ANSWER_CHANGE' events for a taskId).
     - Analyze the frequency and timing of 'CHAT_MESSAGE_SENT' events to gauge their help-seeking behavior and independence.
     - A high number of 'TASK_ANSWER_CHANGE' events for a single task might indicate uncertainty or perfectionism.
 3.  **Communication & Stress Management:** Analyze the chat logs and call transcript for clarity, professionalism, and tone. Correlate events with the client call ('CLIENT_CALL_START'/'CLIENT_CALL_END') to assess performance under pressure.
 4.  **Synthesize and Score:** Combine all your findings into a holistic report. Provide specific examples in the "Strengths" and "Areas for Improvement" sections, referencing both submitted work and behaviors from the event log. All scores must be an integer out of 10.
-5.  **FINAL RECOMMENDATION:** Based on ALL available data (work quality, communication, and behavioral data), provide a final hiring recommendation.
+5.  **FINAL RECOMMENDATION:** Based on ALL available data (work quality, communication, and behavioral data), provide a hiring recommendation for the recruiter to review.
     - The 'Submission Type' provides important context. An 'auto' submission means the candidate ran out of time, which should be considered when evaluating their time management skills.
     - The \`suitabilityScore\` must be an integer from 1 to 10.
     - The \`recommendation\` must be one of 'HIRE', 'CONSIDER', or 'NO_HIRE'.
-    - The \`recommendationReasoning\` should be a concise, 1-2 sentence explanation for your final verdict.
+    - The \`recommendationReasoning\` should be a concise, 1-2 sentence explanation for your verdict.`;
 
-Provide the final report as a JSON object with the specified structure.`;
-
-    await handleApiCall(res, (genAI) => genAI.models.generateContent({
-        model: "gemini-2.5-pro",
-        contents: prompt,
-        config: { responseMimeType: "application/json", responseSchema: analysisSchema },
+    await handleJsonCall(res, '/api/analyze-performance', (claude) => claudeJson(claude, {
+        model: ANALYSIS_MODEL,
+        content: [{ type: 'text', text: prompt }, ...imageBlocks],
+        schema: analysisSchema,
+        toolName: 'save_performance_report',
+        toolDescription: "Save the structured performance report for this candidate.",
     }));
 });
 
 
 app.post('/api/chat-response', async (req, res) => {
     const { simulation, chatHistory } = req.body;
-    const historyString = chatHistory.map(entry => `${entry.author === 'Candidate' ? 'User' : 'Assistant'}: ${entry.message}`).join('\n');
-    const prompt = `You are a helpful AI assistant in a work simulation, acting as a senior colleague.\nThe candidate is performing a simulation for the role of: ${simulation.jobTitle}.\n\nTheir assigned tasks are:\n${simulation.tasks.map(t => `- ${t.title}: ${t.description}`).join('\n')}\n\nBelow is the conversation history. The last message is from the candidate.\n${historyString}\n\nYour role is to provide concise, helpful guidance. Do not give away the answers to the tasks directly. Instead, prompt the candidate to think critically. Keep your responses brief and professional.`;
+    const system = `You are a helpful AI assistant in a work simulation, acting as a senior colleague.\nThe candidate is performing a simulation for the role of: ${simulation.jobTitle}.\n\nTheir assigned tasks are:\n${simulation.tasks.map(t => `- ${t.title}: ${t.description}`).join('\n')}\n\nYour role is to provide concise, helpful guidance. Do not give away the answers to the tasks directly. Instead, prompt the candidate to think critically. Keep your responses brief and professional.`;
 
-    await handleTextApiCall(res, (genAI) => genAI.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt }));
+    const messages = toClaudeMessages(
+        (chatHistory || []).map(entry => ({ role: entry.author === 'Candidate' ? 'user' : 'assistant', text: entry.message })),
+        '(The candidate opened the chat.)',
+    );
+
+    await handleTextCall(res, '/api/chat-response', (claude) => claudeText(claude, { model: FAST_MODEL, system, messages }));
 });
 
 app.post('/api/client-call-response', async (req, res) => {
     const { jobTitle, chatHistory } = req.body;
-    const historyString = chatHistory.map(entry => `${entry.author === 'You' ? 'User' : 'Client'}: ${entry.text}`).join('\n');
-    const systemInstruction = `You are a client calling an employee (${jobTitle}) with an urgent, slightly vague, and stressful problem. Be professional but firm. The goal is to test the employee's communication and problem-solving skills under pressure. The first message from the user is them answering your call.`;
-    const prompt = `${systemInstruction}\n\nConversation history:\n${historyString}\n\nClient's turn to speak:`;
+    const system = `You are a client calling an employee (${jobTitle}) with an urgent, slightly vague, and stressful problem. Be professional but firm. The goal is to test the employee's communication and problem-solving skills under pressure. The call opens with the employee answering. Stay in character as the client and reply only with what the client says out loud, with no stage directions or labels.`;
 
-    await handleTextApiCall(res, (genAI) => genAI.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt }));
+    const messages = toClaudeMessages(
+        (chatHistory || []).map(entry => ({ role: entry.author === 'You' ? 'user' : 'assistant', text: entry.text })),
+        '(Answers the call)',
+    );
+
+    await handleTextCall(res, '/api/client-call-response', (claude) => claudeText(claude, { model: FAST_MODEL, system, messages }));
 });
 
 app.post('/api/support-chat-response', async (req, res) => {
     const { chatHistory } = req.body;
-    
-    const processedHistory = [...chatHistory];
+
+    // The first entry is the bot's canned greeting, which is not part of the real conversation.
+    const processedHistory = [...(chatHistory || [])];
     if (processedHistory.length > 0 && processedHistory[0].author === 'bot') {
-        processedHistory.shift(); 
+        processedHistory.shift();
     }
 
     if (processedHistory.length === 0) {
         return res.json({ text: "I'm ready to help. What's your question?" });
     }
 
-    const contents = processedHistory.map(entry => ({
-        role: entry.author === 'user' ? 'user' : 'model',
-        parts: [{ text: entry.message }],
-    }));
-    
-    const systemInstruction = `You are a friendly and helpful support assistant for an application called SimuHire. SimuHire is an AI-powered workday simulation platform for hiring. 
+    const messages = toClaudeMessages(
+        processedHistory.map(entry => ({ role: entry.author === 'user' ? 'user' : 'assistant', text: entry.message })),
+        '(The user opened the support chat.)',
+    );
+
+    const system = `You are a friendly and helpful support assistant for an application called SimuHire. SimuHire is an AI-powered workday simulation platform for hiring.
     - Recruiters use it to create realistic job simulations to test candidates.
     - Candidates complete these simulations to showcase their skills.
     - Key features include AI task generation, a simulated workspace with tools (chat, email, editor, sheets), and AI-powered performance analysis.
     - Upcoming features include webcam proctoring and a secure desktop lockdown.
-    
+
     Your primary role is to answer user questions about the application's features, how to use it, and general advice on hiring best practices.
-    
+
     IMPORTANT RULE: If a user asks a question that seems like they are a candidate trying to get help or answers for their simulation tasks, you MUST NOT provide a direct answer. Instead, you should gently decline and remind them that the simulation is meant to assess their own skills. For example, you can say: "I can't help with specific answers for your simulation tasks, as that would defeat the purpose of the assessment. However, I can help you understand how to use the tools in the workspace!"`;
 
-    await handleTextApiCall(res, (genAI) => genAI.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: contents, // Use the processed, valid conversation history
-        config: {
-            systemInstruction,
-        },
-    }));
+    await handleTextCall(res, '/api/support-chat-response', (claude) => claudeText(claude, { model: FAST_MODEL, system, messages }));
 });
-
 
 // --- Serve Frontend ---
 // This catch-all route should be last.

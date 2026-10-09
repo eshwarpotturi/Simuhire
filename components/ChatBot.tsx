@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { ChatIcon, PaperAirplaneIcon, XIcon, SpinnerIcon } from './Icons';
-import { getSupportChatResponse } from '../services/geminiService';
+import { getSupportChatResponse } from '../services/aiService';
 
 interface Message {
   author: 'user' | 'bot';
