@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Simulation, CandidateWork, PerformanceReport, Task, RecommendationVerdict, TaskAnswer, TaskType, LoggedEvent } from '../types';
-import { analyzeCandidatePerformance, getChatResponse } from '../services/geminiService';
+import { analyzeCandidatePerformance, getChatResponse } from '../services/aiService';
 import { ChatIcon, SpinnerIcon, ExclamationIcon, CheckCircleIcon, XIcon, PhotographIcon, VolumeUpIcon, VideoCameraIcon } from './Icons';
 import { ClientCallModal } from './ClientCallModal';
 import TaskAssetDisplay from './TaskAssetDisplay';
